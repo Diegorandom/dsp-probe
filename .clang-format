@@ -1,0 +1,24 @@
+BasedOnStyle: LLVM
+
+# Coincide con el código existente de VocalRider: 4 espacios y llaves Allman,
+# para que mover un archivo entre los dos repos no produzca un diff falso.
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+BreakBeforeBraces: Allman
+AccessModifierOffset: -4
+
+ColumnLimit: 100
+PointerAlignment: Left
+NamespaceIndentation: None
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: Inline
+AllowShortLoopsOnASingleLine: false
+
+AlignAfterOpenBracket: Align
+BreakConstructorInitializers: BeforeColon
+ConstructorInitializerIndentWidth: 4

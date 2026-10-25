@@ -1,0 +1,19 @@
+# Build output
+build/
+build-*/
+cmake-build-*/
+out/
+
+# El ejemplo escribe CSV en el directorio de trabajo
+*.csv
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editores
+.vscode/
+.idea/
+*.swp
+.cache/
+compile_commands.json

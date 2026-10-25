@@ -1,0 +1,130 @@
+name: CI
+
+# Coste, leído de la documentación de facturación de GitHub antes de escribir
+# esto: los minutos de Actions en repos privados salen de la cuota del plan
+# (2.000/mes en Free) y el precio por minuto depende del runner:
+#
+#   Linux 2-core   $0,006/min     ×1
+#   Windows 2-core $0,010/min     ×1,7
+#   macOS 3-4 core $0,062/min     ×~10
+#
+# De ahí el reparto: en cada push corre solo lo barato (Linux). Windows, macOS
+# y el adaptador JUCE —lo caro, y lo que más tarda porque descarga JUCE— solo
+# corren a mano. Sin esto, un push completo costaba del orden de 100 minutos
+# equivalentes de cuota y ~17 pushes la agotaban.
+#
+# Si la cuenta no tiene método de pago, al agotar la cuota GitHub bloquea los
+# workflows en vez de cobrar: el fallo es visible, no una factura sorpresa.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: linux · ${{ matrix.compiler }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { compiler: gcc, cc: gcc, cxx: g++ }
+          - { compiler: clang, cc: clang, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Configure
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DDSP_PROBE_BUILD_TESTS=ON -DDSP_PROBE_BUILD_EXAMPLES=ON
+      - run: cmake --build build
+      - run: ctest --test-dir build --output-on-failure
+
+  sanitizers:
+    name: sanitizers · asan + ubsan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - run: cmake --preset asan
+      - run: cmake --build --preset asan
+      - run: ctest --preset asan
+
+  # ---- a partir de aquí, solo a mano (workflow_dispatch) -------------------
+
+  other-platforms:
+    name: ${{ matrix.os }} · ${{ matrix.compiler }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, compiler: appleclang }
+          - { os: windows-latest, compiler: msvc }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Ninja (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja
+
+      # Windows usa el generador de Visual Studio, que ya trae su entorno:
+      # Ninja ahí exigiría además ilammy/msvc-dev-cmd para montar MSVC.
+      - name: Configure (Ninja)
+        if: runner.os != 'Windows'
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DDSP_PROBE_BUILD_TESTS=ON -DDSP_PROBE_BUILD_EXAMPLES=ON
+
+      - name: Configure (MSVC)
+        if: runner.os == 'Windows'
+        run: >
+          cmake -S . -B build
+          -DDSP_PROBE_BUILD_TESTS=ON -DDSP_PROBE_BUILD_EXAMPLES=ON
+
+      - name: Build (Ninja)
+        if: runner.os != 'Windows'
+        run: cmake --build build
+
+      - name: Build (MSVC)
+        if: runner.os == 'Windows'
+        run: cmake --build build --config Release
+
+      - name: Test (Ninja)
+        if: runner.os != 'Windows'
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Test (MSVC)
+        if: runner.os == 'Windows'
+        run: ctest --test-dir build -C Release --output-on-failure
+
+  juce-adapter:
+    name: juce adapter · ${{ matrix.os }}
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux queda fuera a propósito: JUCE necesita paquetes X11/ALSA para
+        # sus módulos y el job se vuelve frágil sin aportar nada que macOS y
+        # Windows no cubran ya para juce_core + juce_events.
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build-juce -DCMAKE_BUILD_TYPE=Release
+          -DDSP_PROBE_BUILD_JUCE_ADAPTER=ON
+          -DDSP_PROBE_BUILD_TESTS=OFF -DDSP_PROBE_BUILD_EXAMPLES=OFF
+      - name: Build adapter compile check
+        run: cmake --build build-juce --config Release --target dsp_probe_juce_compile_check
