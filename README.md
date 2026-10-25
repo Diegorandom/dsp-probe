@@ -1,64 +1,50 @@
 # dsp-probe
 
-**Real-time-safe probes for testing DSP code.** A header-only C++17 library that
-lets you measure what a piece of audio DSP is actually doing — without breaking
-the one rule the audio thread has: never allocate, never lock, never block.
+**You can't printf from the audio thread.**
 
-Extracted from **RaiderPro**, a commercial audio plugin, where it ran inside the
-DSP functional tests before being made standalone.
+A 64-sample block at 48 kHz gives you 1.333 ms, and nothing you would use to look
+inside a DSP fits in that window. So the numbers have to leave through a lock-free
+queue — and that hand-off, not the logging, is the engineering problem.
 
-`C++17` · `header-only` · `zero dependencies` · `MIT`
+Header-only C++17, zero dependencies. Extracted from **RaiderPro**, a commercial
+audio plugin, where it ran inside the DSP functional tests before being made
+standalone.
 
----
+`C++17` · `header-only` · `zero deps` · `MIT`
 
-## The problem
+![dsp-probe architecture: one thread boundary, one lock-free ring, one sink interface](docs/architecture.png)
 
-A DSP bug is rarely a crash. It is a number that drifts: a gain that is 0.3 dB
-wrong, a limiter that attenuates one block too late, a window that advances one
-sample too far. To find it you have to *see* the numbers the DSP produces while
-it runs.
+*The audio thread writes, another thread drains. Nothing crosses the boundary
+except the ring, and a row that does not fit leaves through the counter on the
+left rather than blocking.*
 
-And the audio thread will not let you print them.
+## The constraint
 
-| Constraint | Why |
-|---|---|
-| No `malloc` | allocation can take a lock or fault; either blows the deadline |
-| No locks | priority inversion — the audio thread must never wait on anything |
-| No `printf` | it formats in user space and takes internal locks |
-| No debugger stepping | stepping changes the timing you are trying to measure |
+At 48 kHz and 64-sample blocks, **750 blocks arrive every second**. A timer
+draining at 30 Hz has to move **25 rows a tick** against a ring of **8,192 rows**
+— 2^13, or **10.9 seconds** of audio. The capacity is not the interesting number;
+the interesting number is what happens when it runs out.
 
-So the values have to be handed to another thread through a lock-free queue and
-written to a file you can open in a spreadsheet. **That hand-off is the whole
-engineering problem**, and this library is that hand-off, tested.
+Waiting is not an option. Waiting spends the block budget, and the budget *is* the
+deadline. So `push()` **drops the incoming row and counts it**. Dropping on write
+keeps everything already queued ordered and intact, and `test_probe.cpp` asserts
+exactly that: the survivors are the oldest rows, not a corrupted mix.
 
----
+The count is what keeps the output honest. A probe that loses rows silently turns
+a test that passes into a test that lies, which is why `dropped()` ships with the
+policy instead of as an afterthought.
 
-## What this demonstrates
+Every line of `push()` is bounded: `noexcept`, no allocation, no locks. Memory
+happens in the constructor or not at all.
 
-### C++
+## What it costs, in specifics
 
-| Concept | Where |
-|---|---|
-| Real-time safety: `noexcept`, bounded work, all allocation hoisted to the constructor | `Probe::push` |
-| Lock-free single-producer/single-consumer ring buffer with acquire/release ordering | `probe.hpp` |
-| Cache-line separation so producer and consumer never share a line (false sharing) | `alignas(64)` on `read_`/`write_` |
-| `std::variant` + `std::visit` + `if constexpr` for typed, total, allocation-free formatting | `property.hpp` |
-| Variadic templates + fold expressions to write a row of N typed values | `Probe::push` |
-| `static_assert` producing a readable error at the call site, not inside `std::variant` | `is_property_type_v` |
-| Dependency inversion: a `Sink` interface decoupling the real-time core from all I/O | `sink.hpp` |
-| Header-only library design: `INTERFACE` target, presets, `install()`/`export()` | `CMakeLists.txt` |
-
-### DSP
-
-| Concept | Where |
-|---|---|
-| Block processing: the unit of measurement is the block, not the sample | `examples/csv_from_sine.cpp` |
-| Backpressure policy — **drop and count, never block** | `Probe::push`, `dropped()` |
-| Why the *incoming* row is the one dropped, keeping the queue ordered and intact | `test_probe.cpp` |
-| Peak and RMS per block as the primitive measurements | example |
-| The thread boundary as a design constraint, not an afterthought | throughout |
-
----
+- **8,192 rows = 2^13** — `index & mask` instead of a modulo, allocated once
+- **One producer thread** — a second audio thread would need the lock the design avoids
+- **`alignas(64)` on `read_` and `write_`** — producer and consumer never share a cache line
+- **`std::variant<float, int, double, bool>`** — a closed column set, rejected at the call site by a `static_assert`
+- **A `Sink` interface** — `std::ofstream` in the core, JUCE confined to one optional adapter
+- **18 test cases, 86 assertions** — index wrap, drops at capacity, arity, `maxRows` batching
 
 ## The hot path
 
@@ -89,15 +75,6 @@ void push(const Args&... args) noexcept
 }
 ```
 
-Two decisions are visible in those fifteen lines, and both are the point:
-
-- **It drops the incoming row instead of blocking.** On the audio thread the only
-  correct response to backpressure is to lose a row rather than miss a deadline.
-  Dropping on *write* keeps everything already queued ordered and consistent —
-  the alternative would corrupt the history you are about to analyse.
-- **The loss is counted.** `dropped()` is what stops that policy from becoming
-  silent data loss. A test that ignores it is a test that might be lying.
-
 ```cpp
 // NON-AUDIO THREAD. Any timer will do.
 probe.drain(sink);
@@ -106,8 +83,6 @@ probe.drain(sink);
 probe.stop(sink);                // disarm + drain the remainder
 assert(probe.dropped() == 0);    // if this fails, the CSV is missing rows
 ```
-
----
 
 ## Getting started
 
@@ -133,10 +108,10 @@ probe.push(blockIndex, peak, gainReductionDb);   // audio thread
 probe.drain(sink);                               // any other thread
 ```
 
-`drain()` writes to any `Sink`. `MemorySink` keeps rows in memory, so unit tests
+`drain()` writes to any `Sink`. `MemorySink` keeps rows in memory, so a unit test
 can assert on what a probe produced without touching a filesystem.
 
-### API
+## API
 
 | Member | Thread | Notes |
 |---|---|---|
@@ -147,12 +122,8 @@ can assert on what a probe produced without touching a filesystem.
 | `stop(sink)` | non-audio | Disarms, drains the remainder, flushes |
 | `dropped()` / `pending()` | any | Rows lost; rows queued |
 
-Columns hold `float`, `int`, `double` or `bool` — a closed set, enforced with a
-`static_assert`. Floating point is written with **6 decimals**, matching what the
-original plugin logger produced, so reference CSVs stay comparable across the
-migration.
-
----
+Floating point is written with **6 decimals**, matching what the original plugin
+logger produced, so reference CSVs stay comparable across the migration.
 
 ## Where it came from
 
@@ -165,15 +136,14 @@ plugin before the extraction; what is new here is the packaging:
 | `juce::AbstractFifo` + a parallel vector of rows | `Probe`: one SPSC ring, acquire/release on the indices |
 | `#if JUCE_DEBUG` around everything | **removed** — a library that silently no-ops is how you end up debugging a test that never logged |
 | `juce::FileOutputStream` only | a `Sink` seam: `std::ofstream` in the core, JUCE in the adapter |
-| `juce::Timer` owned by the logger | `drain()` you call from your own timer |
+| `juce::Timer` owned by the logger | `drain()` you call from your own timer — the timer is a client, not part of the library |
 | CSV escaping, drop counter, header-once | **kept**, and now covered by tests |
 
 **JUCE is optional.** It is confined to one adapter header —
 `dsp_probe::juce_support::CsvLogger` — which keeps the exact original API
-(`start()`, `pushFromAudioThread()`, `getDroppedRowCount()`, …) so an existing
-call site needs no changes. The core has no JUCE dependency at all.
-
----
+(`start()`, `pushFromAudioThread()`, `getDroppedRowCount()`, …), so an existing
+call site needs no changes. The core has no JUCE dependency at all, which is why
+the tests run without a plugin host.
 
 ## Verified, not asserted
 
@@ -183,28 +153,27 @@ cmake --preset debug && cmake --build --preset debug && ctest --preset debug
 
 - **86 assertions across 18 test cases**, covering the parts of a lock-free ring
   buffer that actually break: index wrap-around, dropping at capacity (and that
-  the survivors are the *oldest*, not a corrupted mix), arity mismatch,
-  `maxRows` batching, and a disarmed probe ignoring `push()` without counting it
-  as a drop.
+  the survivors are the *oldest*), arity mismatch, `maxRows` batching, and a
+  disarmed probe ignoring `push()` without counting it as a drop.
 - **ASan + UBSan** via `--preset asan`.
-- **CI** on Linux (gcc and clang) plus a sanitizer job; macOS and Windows on
-  demand. The Windows and macOS jobs are manual on purpose — see the cost note
-  in the workflow.
+- **CI** on Linux (gcc and clang) plus a sanitizer job, on every push. macOS,
+  Windows and the JUCE compile check are manual jobs on purpose: runners cost 1×
+  on Linux but ~1.7× on Windows and ~10× on macOS, against a 2,000 min/month
+  private-repo quota.
 
 ## What is not solved
 
-Written down rather than left to be discovered:
+Declared, not hidden:
 
 - **Row layout is a vector of vectors.** One heap allocation per slot at
-  construction and a pointer chase per drained row. A single flat buffer would be
-  one allocation and contiguous; it is declared rather than fixed because the
-  cost lands on construction and on the draining thread — never on the audio
-  thread, which is the boundary that matters.
-- **`dropped()` is a total, not a timeline.** It says how many rows were lost,
+  construction and a pointer chase per drained row. A flat buffer would be one
+  allocation and contiguous; it is declared rather than fixed because the cost
+  lands on construction and on the draining thread, never on the audio thread.
+- **`dropped()` is a total, not a timeline.** It says how many rows were lost and
   not when, so it cannot localise an overload to a block.
 - **The extracted adapter has not been compiled in this repository yet.** Its
-  behaviour is the plugin's proven behaviour; the extraction (namespace, `Sink`
-  seam) is new code. The JUCE CI job is its first real compile.
+  behaviour is the plugin's proven behaviour; the extraction is new code. The JUCE
+  CI job is its first real compile.
 - **Number formatting follows the process locale** until something calls
   `std::setlocale(LC_NUMERIC, …)`; a comma-decimal locale would corrupt the CSV.
 - **CSV injection is not neutralised.** A field starting with `=` is still
