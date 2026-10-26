@@ -18,12 +18,39 @@ standalone.
 except the ring, and a row that does not fit leaves through the counter on the
 left rather than blocking.*
 
-## The constraint
+## Throughput and sizing
 
-At 48 kHz and 64-sample blocks, **750 blocks arrive every second**. A timer
-draining at 30 Hz has to move **25 rows a tick** against a ring of **8,192 rows**
-— 2^13, or **10.9 seconds** of audio. The capacity is not the interesting number;
-the interesting number is what happens when it runs out.
+Every number in this section follows from one: at 48 kHz a 64-sample block lasts
+**1.333 ms**.
+
+| Quantity | Value |
+|---|---|
+| Blocks per second | 48,000 / 64 = **750** |
+| Rows per second | one `push()` per block = **750** — columns do not change the row count |
+| Rows per tick, draining at 30 Hz | 750 / 30 = **25** |
+| Ring capacity | 8,192 rows (2^13) |
+| Headroom, 750 rows/s | 8,192 / 750 = **10.9 s of audio** |
+
+In steady state a 30 Hz drain moves 25 rows out of a ring that holds 8,192, so the
+ring sits at about **0.3 % per tick** and never fills on its own. That is the point
+that is easy to misread: **the ring is not a throughput buffer, it is a stall
+buffer.** It absorbs the case where the draining thread does not run — blocked on
+disk, starved by the scheduler, parked at a breakpoint — while the audio thread
+keeps pushing. 8,192 rows is roughly 10.9 seconds of that before the ring is full.
+
+So the sizing rule is stated rather than implied:
+
+```
+capacity  >=  rows_per_second  x  longest_stall_you_accept
+```
+
+rounded up to a power of two. The 8,192 default assumes 48 kHz with 64-sample
+blocks and one row per block. The same capacity covers **87 s** at 512-sample
+blocks (93.75 rows/s) and only **2.7 s** at 3,000 rows/s (four rows per block at 64
+samples) — so the default is a choice about that operating point, not a universal
+figure.
+
+What happens when the ring runs out:
 
 Waiting is not an option. Waiting spends the block budget, and the budget *is* the
 deadline. So `push()` **drops the incoming row and counts it**. Dropping on write
@@ -37,9 +64,10 @@ policy instead of as an afterthought.
 Every line of `push()` is bounded: `noexcept`, no allocation, no locks. Memory
 happens in the constructor or not at all.
 
-## What it costs, in specifics
+## Implementation choices, and what each one costs
 
-- **8,192 rows = 2^13** — `index & mask` instead of a modulo, allocated once
+- **8,192 rows = 2^13** — `index & mask` instead of a modulo, allocated once; the
+  size is the stall budget from above, not a tuning knob
 - **One producer thread** — a second audio thread would need the lock the design avoids
 - **`alignas(64)` on `read_` and `write_`** — producer and consumer never share a cache line
 - **`std::variant<float, int, double, bool>`** — a closed column set, rejected at the call site by a `static_assert`
