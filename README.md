@@ -210,6 +210,17 @@ Declared, not hidden:
   lands on construction and on the draining thread, never on the audio thread.
 - **`dropped()` is a total, not a timeline.** It says how many rows were lost and
   not when, so it cannot localise an overload to a block.
+- **The compile check pins JUCE 8.0.15, and nothing in this shop builds against
+  8.0.15.** RaiderPro and VocalFocus build against `/Applications/JUCE`, whose
+  `juce_core.h` says **8.0.12**, and the security track is **8.0.16**. So the check
+  proves the adapter compiles against a version it is not shipped with. It is a
+  one-flag fix (`-DDSP_PROBE_JUCE_TAG=8.0.12`, or whichever ships next) and the
+  default is a decision, not an oversight — recorded here rather than changed
+  quietly.
+- **Each push re-clones JUCE.** The adapter job fetches it with `FetchContent` and
+  shallow git, no `actions/cache`; the 103 s / 157 s above include that download.
+  A cache would cut most of it, at the cost of a cache key that has to track the
+  tag.
 - **The adapter is compile-checked, not exercised.** The check builds and links
   it, and calls `getDroppedRowCount()` and `getColumnNames()`; nothing starts a
   timer or writes a file, because that needs a `MessageManager` and would write
