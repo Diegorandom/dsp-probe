@@ -15,6 +15,14 @@ name: CI
 #
 # Si la cuenta no tiene método de pago, al agotar la cuota GitHub bloquea los
 # workflows en vez de cobrar: el fallo es visible, no una factura sorpresa.
+#
+# ACTUALIZACIÓN 2026-10-26: el repo pasó a público, así que el reparto ya no es
+# por factura — «Actions usage is free for public repositories that use standard
+# GitHub-hosted runners» (docs.github.com, billing). Los minutos de los jobs
+# manuales ahora cuestan 0 y lo que queda es tiempo de reloj: el run completo de
+# 7 jobs tardó 224 s, de los cuales el adaptador JUCE se llevó 103 s en macOS y
+# 157 s en Windows. Sin fecha para pasarlos al push: ahorrar 4 min de reloj por
+# push sigue siendo preferible a gastarlos en cada uno.
 
 on:
   push:

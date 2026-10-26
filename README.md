@@ -184,10 +184,19 @@ cmake --preset debug && cmake --build --preset debug && ctest --preset debug
   the survivors are the *oldest*), arity mismatch, `maxRows` batching, and a
   disarmed probe ignoring `push()` without counting it as a drop.
 - **ASan + UBSan** via `--preset asan`.
-- **CI** on Linux (gcc and clang) plus a sanitizer job, on every push. macOS,
-  Windows and the JUCE compile check are manual jobs on purpose: runners cost 1×
-  on Linux but ~1.7× on Windows and ~10× on macOS, against a 2,000 min/month
-  private-repo quota.
+- **The JUCE adapter compiles on macOS and Windows.** Manual `workflow_dispatch`
+  of 2026-10-26, all 7 jobs green in **3.7 min wall**: the adapter check took
+  **103 s** on macOS and **157 s** on Windows against JUCE 8.0.15 (it configures,
+  fetches JUCE, and links `juce_events`). That was the first time this adapter was
+  compiled outside the plugin, and the check earned its keep immediately: it failed
+  at configure with *“A C compiler is required to build targets that depend on
+  JUCE”*, an error no push-triggered job could see, because this job is
+  `workflow_dispatch`-only.
+- **CI** on Linux (gcc 52 s, clang 45 s) plus a sanitizer job (36 s), on every push.
+  macOS, Windows and the JUCE compile check stay manual: the split was sized when
+  this repository was private, where macOS runners bill at ~10× Linux and Windows
+  at ~1.7×. Since 2026-10-26 the repository is public, so those minutes are free
+  and the remaining reason is wall-clock and latency, not billing.
 
 ## What is not solved
 
@@ -199,9 +208,11 @@ Declared, not hidden:
   lands on construction and on the draining thread, never on the audio thread.
 - **`dropped()` is a total, not a timeline.** It says how many rows were lost and
   not when, so it cannot localise an overload to a block.
-- **The extracted adapter has not been compiled in this repository yet.** Its
-  behaviour is the plugin's proven behaviour; the extraction is new code. The JUCE
-  CI job is its first real compile.
+- **The adapter is compile-checked, not exercised.** The check builds and links
+  it, and calls `getDroppedRowCount()` and `getColumnNames()`; nothing starts a
+  timer or writes a file, because that needs a `MessageManager` and would write
+  into the user's Documents directory. Its runtime behaviour is the plugin's proven
+  behaviour, not something this repository tests.
 - **Number formatting follows the process locale** until something calls
   `std::setlocale(LC_NUMERIC, …)`; a comma-decimal locale would corrupt the CSV.
 - **CSV injection is not neutralised.** A field starting with `=` is still
