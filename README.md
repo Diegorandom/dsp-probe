@@ -68,7 +68,9 @@ happens in the constructor or not at all.
 
 - **8,192 rows = 2^13** — `index & mask` instead of a modulo, allocated once; the
   size is the stall budget from above, not a tuning knob
-- **One producer thread** — a second audio thread would need the lock the design avoids
+- **One producer thread** — SPSC, single producer single consumer, is what makes that
+  a contract rather than a convention: a second audio thread would need the lock the
+  design avoids
 - **`alignas(64)` on `read_` and `write_`** — producer and consumer never share a cache line
 - **`std::variant<float, int, double, bool>`** — a closed column set, rejected at the call site by a `static_assert`
 - **A `Sink` interface** — `std::ofstream` in the core, JUCE confined to one optional adapter
@@ -111,6 +113,13 @@ probe.drain(sink);
 probe.stop(sink);                // disarm + drain the remainder
 assert(probe.dropped() == 0);    // if this fails, the CSV is missing rows
 ```
+
+The two indices are the only shared state, and each crosses the thread boundary with
+`release` on the writer's side and `acquire` on the reader's. No CAS loop, no mutex,
+no atomic RMW on the hot path — `push()` is a load, a compare, a fold and a store.
+That is the entire SPSC contract, and it stays that cheap **only while the producer
+is single**. Two producers would turn it into a different problem with a different
+cost, which is why the library is shaped so that adding one is not a tempting edit.
 
 ## Getting started
 
