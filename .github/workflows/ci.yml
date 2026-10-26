@@ -18,11 +18,21 @@ name: CI
 #
 # ACTUALIZACIÓN 2026-10-26: el repo pasó a público, así que el reparto ya no es
 # por factura — «Actions usage is free for public repositories that use standard
-# GitHub-hosted runners» (docs.github.com, billing). Los minutos de los jobs
-# manuales ahora cuestan 0 y lo que queda es tiempo de reloj: el run completo de
-# 7 jobs tardó 224 s, de los cuales el adaptador JUCE se llevó 103 s en macOS y
-# 157 s en Windows. Sin fecha para pasarlos al push: ahorrar 4 min de reloj por
-# push sigue siendo preferible a gastarlos en cada uno.
+# GitHub-hosted runners» (docs.github.com, billing). Los minutos cuestan 0 y lo
+# que queda es tiempo de reloj: el run completo de 7 jobs tardó 224 s, de los
+# cuales el adaptador JUCE se llevó 103 s en macOS y 157 s en Windows.
+#
+# SEGUNDO CAMBIO, 2026-10-26: el adaptador JUCE pasa a correr en CADA PUSH.
+# El motivo no es el coste, que es cero, sino que el check encontró un bug real
+# en su primera ejecución —«A C compiler is required to build targets that
+# depend on JUCE»— después de dos semanas en las que nada lo compilaba. Un job
+# que solo corre a mano no es un gate: es un botón que nadie pulsa, y este
+# archivo ya demostró que tiene algo que decir en cada cambio de CMake.
+#
+# Lo que SIGUE a mano es `other-platforms` (build+test completos en macOS y
+# Windows): no vigila nada que el Linux no vigile ya, y cuesta 49 s + 103 s de
+# reloj por push. La regla del reparto queda así: en cada push corre lo que
+# puede romperse sin que nadie lo note; a mano, lo que solo duplica cobertura.
 
 on:
   push:
@@ -116,9 +126,11 @@ jobs:
         if: runner.os == 'Windows'
         run: ctest --test-dir build -C Release --output-on-failure
 
+  # El adaptador corre en cada push: es el único job que puede podrirse en
+  # silencio (una JUCE nueva, un header que deja de compilar) y el único que
+  # encontró un bug real la primera vez que se ejecutó.
   juce-adapter:
     name: juce adapter · ${{ matrix.os }}
-    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

@@ -192,11 +192,13 @@ cmake --preset debug && cmake --build --preset debug && ctest --preset debug
   at configure with *“A C compiler is required to build targets that depend on
   JUCE”*, an error no push-triggered job could see, because this job is
   `workflow_dispatch`-only.
-- **CI** on Linux (gcc 52 s, clang 45 s) plus a sanitizer job (36 s), on every push.
-  macOS, Windows and the JUCE compile check stay manual: the split was sized when
-  this repository was private, where macOS runners bill at ~10× Linux and Windows
-  at ~1.7×. Since 2026-10-26 the repository is public, so those minutes are free
-  and the remaining reason is wall-clock and latency, not billing.
+- **CI** on every push: Linux (gcc 52 s, clang 45 s), sanitizers (36 s), and the
+  JUCE adapter compile check on **macOS and Windows** (103 s / 157 s against JUCE
+  8.0.15). The adapter moved onto push on 2026-10-26 — minutes are free now that
+  this repository is public, and it is the only job that can rot silently: it found
+  a real configure bug on its first run. Full macOS and Windows builds of the whole
+  suite stay manual (`workflow_dispatch`), because they duplicate Linux coverage at
+  49 s + 103 s of extra wall clock per push.
 
 ## What is not solved
 
