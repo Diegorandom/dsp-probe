@@ -56,6 +56,14 @@ endif()
 # varios minutos—, que no debe pagar quien solo quiere el núcleo, que no tiene
 # ninguna dependencia de JUCE.
 if(DSP_PROBE_BUILD_JUCE_ADAPTER)
+  # JUCE aborta el configure si el proyecto no habilita C (su propio
+  # CMakeLists.txt:40: "A C compiler is required to build targets that depend on
+  # JUCE"). Se habilita AQUÍ y no en project(): el núcleo es C++17 puro y no
+  # debe arrastrar un compilador de C, que es justo lo que compra quien deja
+  # esta opción apagada. Detectado por el job `juce-adapter` del 2026-10-26, el
+  # primer compile real que tuvo este adaptador fuera del plugin.
+  enable_language(C)
+
   include(FetchContent)
 
   # La versión de JUCE contra la que se comprueba el adaptador. Es una cache
