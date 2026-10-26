@@ -34,11 +34,19 @@ name: CI
 # reloj por push. La regla del reparto queda así: en cada push corre lo que
 # puede romperse sin que nadie lo note; a mano, lo que solo duplica cobertura.
 #
-# TERCER CAMBIO, 2026-10-26: el adaptador ya no re-clona JUCE en cada push. El
-# tag se lee de CMakeLists.txt, el árbol se cachea por OS+tag y se engancha con
-# FETCHCONTENT_SOURCE_DIR_JUCE, que es el override documentado de FetchContent:
-# así el clon solo ocurre en cache miss y CMake no descarga nada. Medido: ver
-# README.
+# TERCER CAMBIO, 2026-10-26: se PROBÓ a cachear el checkout de JUCE y se revirtió
+# con medición delante. Mismo commit, mismo runner (macOS), run 40382776550:
+#
+#                      cold   warm
+#   restore del cache    1 s    4 s
+#   git clone --depth 1  4 s    0 s (saltado)
+#   cmake configure     64 s   68 s
+#   build del check     20 s   27 s
+#   save del cache       4 s    —
+#
+# El clon cuesta 4 s. Cachearlo cuesta 4 s de restore + 4 s de save y añade un
+# modo de fallo (clave rancia sirviendo el árbol equivocado). Pérdida neta: no
+# se cachea. El tiempo de este job es configure + build de JUCE, no la descarga.
 
 on:
   push:
@@ -147,50 +155,10 @@ jobs:
         os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
-
-      # El tag vive en UN solo sitio: CMakeLists.txt. Se lee de ahí en vez de
-      # duplicarlo aquí, porque una clave de cache que se queda atrás sirve el
-      # árbol equivocado sin decir nada. Si el parseo falla, el job falla: un
-      # "no pude leerlo" silencioso volvería a clonar sin que nadie lo note.
-      - name: Read JUCE tag from CMakeLists
-        id: juce
-        shell: bash
-        run: |
-          tag=$(grep -A3 'DSP_PROBE_JUCE_TAG$' CMakeLists.txt \
-                | grep -oE '"[0-9]+\.[0-9]+\.[0-9]+"' | head -1 | tr -d '"')
-          if [ -z "$tag" ]; then
-            echo "::error::no pude leer DSP_PROBE_JUCE_TAG de CMakeLists.txt"
-            exit 1
-          fi
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "JUCE tag: $tag"
-
-      # Directorio cacheado con el tag dentro del nombre y de la clave, y SIN
-      # restore-keys: un fallback de otra versión dejaría el árbol poblado con
-      # el tag equivocado, el clone no correría (cache-hit sería false pero el
-      # directorio existiría) y el check compilaría contra la versión que no es.
-      - name: Cache JUCE sources
-        id: juce-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/juce-${{ steps.juce.outputs.tag }}
-          key: juce-${{ runner.os }}-${{ steps.juce.outputs.tag }}
-
-      # Solo en cache miss. Un clon superficial: no hace falta historia para
-      # compilar un header.
-      - name: Clone JUCE (cache miss only)
-        if: steps.juce-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: >
-          git clone --depth 1 --branch "${{ steps.juce.outputs.tag }}"
-          https://github.com/juce-framework/JUCE.git
-          "${{ runner.temp }}/juce-${{ steps.juce.outputs.tag }}"
-
       - name: Configure
         run: >
           cmake -S . -B build-juce -DCMAKE_BUILD_TYPE=Release
           -DDSP_PROBE_BUILD_JUCE_ADAPTER=ON
-          -DFETCHCONTENT_SOURCE_DIR_JUCE=${{ runner.temp }}/juce-${{ steps.juce.outputs.tag }}
           -DDSP_PROBE_BUILD_TESTS=OFF -DDSP_PROBE_BUILD_EXAMPLES=OFF
       - name: Build adapter compile check
         run: cmake --build build-juce --config Release --target dsp_probe_juce_compile_check

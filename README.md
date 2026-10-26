@@ -217,10 +217,13 @@ Declared, not hidden:
   one-flag fix (`-DDSP_PROBE_JUCE_TAG=8.0.12`, or whichever ships next) and the
   default is a decision, not an oversight — recorded here rather than changed
   quietly.
-- **Each push re-clones JUCE.** The adapter job fetches it with `FetchContent` and
-  shallow git, no `actions/cache`; the 103 s / 157 s above include that download.
-  A cache would cut most of it, at the cost of a cache key that has to track the
-  tag.
+- **Each push re-clones JUCE — and that is the cheap part.** Measured on run
+  40382776550 (macOS, same commit): a shallow `git clone` of the pinned tag costs
+  **4 s**, while `cmake` configuring JUCE costs **64-68 s** and building the check
+  another **20-27 s**. Caching the clone was implemented and measured, then
+  reverted: 4 s of restore plus 4 s of save to avoid a 4 s clone is a net loss,
+  and it adds a stale-key failure mode. The cost of this job is CMake configure and
+  the JUCE build, not the download.
 - **The adapter is compile-checked, not exercised.** The check builds and links
   it, and calls `getDroppedRowCount()` and `getColumnNames()`; nothing starts a
   timer or writes a file, because that needs a `MessageManager` and would write
